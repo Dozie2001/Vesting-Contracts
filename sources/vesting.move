@@ -2,10 +2,20 @@ module vesting::vesting {
     use std::signer;
     use aptos_std::math64;
     use aptos_std::simple_map::{Self, SimpleMap};
+    use aptos_framework::event::emit;
     use aptos_framework::fungible_asset::Metadata;
     use aptos_framework::object::{Self, ExtendRef, Object, ObjectGroup};
     use aptos_framework::primary_fungible_store;
     use aptos_framework::timestamp;
+
+    #[test_only]
+    use std::option;
+    #[test_only]
+    use std::option::Option;
+    #[test_only]
+    use std::vector;
+    #[test_only]
+    use aptos_framework::event;
 
     #[resource_group_member(group = ObjectGroup)]
     struct Vesting has key {
@@ -22,7 +32,6 @@ module vesting::vesting {
         amount: u64,
         /// Start time of the stream
         start_time: u64,
-        /// Cliff time (in seconds from start_time)
         cliff: u64,
         /// Total duration of the vesting (in seconds)
         duration: u64,
@@ -30,6 +39,10 @@ module vesting::vesting {
         claimed: u64,
     }
 
+    #[event]
+    struct VestingCreated has copy, drop, store {
+        vesting: Object<Vesting>
+    }
 
     const ERR_NOT_OWNER: u64 = 0;
     const ERR_INVALID_TIME: u64 = 1;
@@ -41,7 +54,6 @@ module vesting::vesting {
 
     /// Create a new Vesting
     public fun create(account: &signer, fa_metadata: Object<Metadata>) {
-        /// acount address of signer
         let account_addr = signer::address_of(account);
         let constructor_ref = object::create_object(account_addr);
         object::disable_ungated_transfer(&object::generate_transfer_ref(&constructor_ref));
@@ -52,6 +64,10 @@ module vesting::vesting {
             fa_metadata,
             streams: simple_map::new(),
             extend_ref: object::generate_extend_ref(&constructor_ref)
+        });
+
+        emit(VestingCreated {
+            vesting: object::object_from_constructor_ref<Vesting>(&constructor_ref)
         });
     }
 
@@ -74,7 +90,6 @@ module vesting::vesting {
 
         let vesting_address = object::object_address(&vesting);
         let vesting_mut_ref = borrow_global_mut<Vesting>(vesting_address);
-        /// check if vesting stream exists already
         assert!(!simple_map::contains_key(&vesting_mut_ref.streams, &beneficiary), ERR_USER_STREAM_EXISTS);
 
         let stream = VestingStream {
@@ -132,20 +147,38 @@ module vesting::vesting {
 
         assert!(simple_map::contains_key(&vesting_ref.streams, &beneficiary), ERR_USER_STREAM_DOES_NOT_EXIST);
 
-        let stream_ref = simple_map::borrow_mut(&mut vesting_ref.streams, &beneficiary);
+        let stream_ref = simple_map::borrow(&mut vesting_ref.streams, &beneficiary);
         compute_vested_amount(stream_ref)
     }
 
     fun compute_vested_amount(stream: &VestingStream): u64 {
         let now = timestamp::now_seconds();
-        if (stream.start_time > now) return 0;
+        if (now < stream.start_time) return 0;
 
         let elapsed = now - stream.start_time;
         if (elapsed < stream.cliff) return 0;
-
         if (elapsed >= stream.duration) return stream.amount;
 
         let vested = math64::mul_div(stream.amount, elapsed, stream.duration);
         math64::min(vested, stream.amount)
+    }
+
+    public fun fa_metadata(vesting: Object<Vesting>): Object<Metadata> acquires Vesting {
+        borrow_global<Vesting>(object::object_address(&vesting)).fa_metadata
+    }
+
+    public fun total_streams(vesting: Object<Vesting>): u64 acquires Vesting {
+        simple_map::length(&borrow_global<Vesting>(object::object_address(&vesting)).streams)
+    }
+
+    #[test_only]
+    public fun last_created_vesting(): Option<Object<Vesting>> {
+        let events = event::emitted_events<VestingCreated>();
+        if (vector::length(&events) == 0) {
+            return option::none()
+        };
+
+        let event = vector::pop_back(&mut events);
+        return option::some(event.vesting)
     }
 }

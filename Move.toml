@@ -4,8 +4,7 @@ version = "1.0.0"
 authors = []
 
 [addresses]
-vesting = '0x0'
-vesting-test = '0x1'
+vesting = '0x09'
 
 [dev-addresses]
 
